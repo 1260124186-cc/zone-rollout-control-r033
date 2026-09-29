@@ -31,6 +31,15 @@ type RevisionCreateInput struct {
 	Entries   []ZoneEntry `json:"entries"`
 }
 
+type RollbackInput struct {
+	RequestKey       string  `json:"request_key"`
+	TargetRevisionID string  `json:"target_revision_id"`
+	TargetSerial     *uint32 `json:"target_serial,omitempty"`
+	Serial           *uint32 `json:"serial,omitempty"`
+	Reason           string  `json:"reason"`
+	ApprovalID       string  `json:"approval_id,omitempty"`
+}
+
 type NodeCreateInput struct {
 	NodeName   string `json:"node_name"`
 	Region     string `json:"region"`
@@ -245,6 +254,41 @@ func ValidateAssessmentInput(input AssessmentInput) error {
 		return Validation("assessment input is invalid", map[string]any{
 			"request_key": err.Error(),
 		})
+	}
+	return nil
+}
+
+func ValidateRollbackInput(input RollbackInput) error {
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	input.TargetRevisionID = strings.TrimSpace(input.TargetRevisionID)
+	input.ApprovalID = strings.TrimSpace(input.ApprovalID)
+	input.Reason = strings.TrimSpace(input.Reason)
+	details := make(map[string]any)
+	if err := validateRequestKey(input.RequestKey); err != nil {
+		details["request_key"] = err.Error()
+	}
+	if len(input.TargetRevisionID) > 128 {
+		details["target_revision_id"] = "is too long"
+	}
+	if input.Serial != nil && *input.Serial == 0 {
+		details["serial"] = "must be greater than zero"
+	}
+	if input.Reason == "" {
+		details["reason"] = "is required"
+	} else if count := utf8.RuneCountInString(input.Reason); count > 1000 {
+		details["reason"] = "must be at most 1000 characters"
+	}
+	if len(input.ApprovalID) > 128 {
+		details["approval_id"] = "is too long"
+	}
+	if input.TargetRevisionID != "" && input.TargetSerial != nil {
+		details["target_revision_id"] = "must not be provided together with target_serial"
+	}
+	if input.TargetRevisionID == "" && (input.TargetSerial == nil || *input.TargetSerial == 0) {
+		details["target_revision_id"] = "is required"
+	}
+	if len(details) > 0 {
+		return Validation("rollback input is invalid", details)
 	}
 	return nil
 }

@@ -72,6 +72,7 @@ func (s *Service) AddRevision(
 				"state":   plan.State,
 			})
 		}
+		var latest *domain.ZoneRevision
 		for _, revision := range state.Revisions {
 			if revision.PlanID != planID {
 				continue
@@ -82,12 +83,16 @@ func (s *Service) AddRevision(
 					"serial":  normalized.Serial,
 				})
 			}
-			if revision.Serial > normalized.Serial {
-				return domain.Validation("revision serial must increase", map[string]any{
-					"serial": normalized.Serial,
-					"latest": revision.Serial,
-				})
+			if latest == nil || revision.Serial > latest.Serial {
+				candidate := revision
+				latest = &candidate
 			}
+		}
+		if latest != nil && latest.Serial > normalized.Serial {
+			return domain.Validation("revision serial must increase", map[string]any{
+				"serial": normalized.Serial,
+				"latest": latest.Serial,
+			})
 		}
 		created = domain.ZoneRevision{
 			ID:         s.ids.New("rev"),

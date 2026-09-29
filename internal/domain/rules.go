@@ -67,6 +67,24 @@ func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func RollbackFingerprint(planID string, input RollbackInput) string {
+	serial := uint32(0)
+	if input.Serial != nil {
+		serial = *input.Serial
+	}
+	payload := fmt.Sprintf(
+		"%s|%s|%s|%d|%s|%s",
+		planID,
+		input.RequestKey,
+		input.TargetRevisionID,
+		serial,
+		input.Reason,
+		input.ApprovalID,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 func BuildAssessment(
 	id string,
 	plan RolloutPlan,

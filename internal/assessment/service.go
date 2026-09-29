@@ -47,6 +47,11 @@ func (s *Service) Evaluate(
 					"assessment_id": existingID,
 				})
 			}
+			if existing.RevisionID != plan.LatestRevisionID {
+				return domain.NewError(domain.CodeIdempotencyConflict, "request key was reused for another revision", map[string]any{
+					"request_key": input.RequestKey,
+				})
+			}
 			result = existing
 			return nil
 		}
@@ -63,7 +68,7 @@ func (s *Service) Evaluate(
 		}
 		probes := make([]domain.Probe, 0)
 		for _, probe := range state.Probes {
-			if probe.PlanID == planID {
+			if probe.PlanID == planID && probe.RevisionID == revision.ID {
 				probes = append(probes, probe)
 			}
 		}

@@ -154,6 +154,29 @@
         "domain",
         "storage"
       ]
+    },
+    {
+      "id": "forward-rollback",
+      "name": "Forward rollback",
+      "entry": "PATCH /v1/plans/{id}/rollbacks",
+      "steps": [
+        "validate target revision, approval, reason, serial, and optimistic version",
+        "copy historical content into a new higher serial revision without mutating history",
+        "persist an idempotent rollback fact and supersede active leases",
+        "reactivate and verify leases, probes, and assessments use the new revision"
+      ],
+      "success": "replays return the same rollback fact and new revision, while post-rollback traffic references the new revision identity",
+      "failure": "identical current content, completed plans, stale approvals, version conflicts, and conflicting request keys make no state change",
+      "verification": "workflowprobe forward-rollback creates and replays rollback, checks new revision lineage, and exercises deterministic failure cases",
+      "module_ids": [
+        "httpapi",
+        "plan",
+        "allocation",
+        "probe",
+        "assessment",
+        "domain",
+        "storage"
+      ]
     }
   ]
 }

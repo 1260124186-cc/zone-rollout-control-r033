@@ -46,11 +46,22 @@ func (s *Service) Allocate(
 				"state":   plan.State,
 			})
 		}
+		revision, found := state.Revisions[plan.LatestRevisionID]
+		if !found {
+			return domain.NewError(domain.CodeStorageFailure, "plan references a missing revision", map[string]any{
+				"revision_id": plan.LatestRevisionID,
+			})
+		}
 		if existingID, exists := state.LeaseRequestKeys[requestIndex]; exists {
 			existing, found := state.LeaseGroups[existingID]
 			if !found {
 				return domain.NewError(domain.CodeStorageFailure, "lease request index is inconsistent", map[string]any{
 					"lease_group_id": existingID,
+				})
+			}
+			if existing.RevisionID != revision.ID {
+				return domain.NewError(domain.CodeIdempotencyConflict, "request key was reused for another revision", map[string]any{
+					"request_key": input.RequestKey,
 				})
 			}
 			if existing.RequestFingerprint != fingerprint {
@@ -106,6 +117,7 @@ func (s *Service) Allocate(
 				State:        domain.LeaseClaimed,
 				ClaimedAt:    now,
 				ExpiresAt:    expiresAt,
+				RevisionID:   revision.ID,
 			}
 			leaseIDs = append(leaseIDs, leaseID)
 		}
@@ -116,6 +128,7 @@ func (s *Service) Allocate(
 			RequestFingerprint: fingerprint,
 			Region:             input.Region,
 			LeaseIDs:           leaseIDs,
+			RevisionID:         revision.ID,
 			CreatedAt:          now,
 		}
 		state.LeaseGroups[group.ID] = group
@@ -137,7 +150,7 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 		if !ok {
 			return domain.NotFound("lease", leaseID)
 		}
-		if lease.State == domain.LeaseReleased || lease.State == domain.LeaseExpired {
+		if lease.State == domain.LeaseReleased || lease.State == domain.LeaseExpired || lease.State == domain.LeaseSuperseded {
 			result = lease
 			return nil
 		}

@@ -135,6 +135,23 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
   -d '{"request_key": "assess-request-0001"}'
 ```
 
+当前版本得到 `review_required` 判定后，可以选择一个历史版本执行前向回滚。服务会复制该历史内容并生成更高序列的新版本，历史版本本身不会被修改：
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/rollbacks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "expected_version": 4,
+    "request_key": "rollback-request-0001",
+    "target_revision_id": "rev_...",
+    "serial": 2026092599,
+    "reason": "restore last known good zone content",
+    "approval_id": "asm_..."
+  }'
+```
+
+回滚成功后计划回到草稿状态；重新激活后，新租约、探针和判定都会引用响应中的新版本。仍领取的旧租约会变为 `superseded`，旧探针保留但不会计入新版本判定。
+
 ## API 概览
 
 成功响应：
@@ -173,6 +190,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/plans/{id}/revisions` | 添加区域版本 |
 | `PATCH` | `/v1/plans/{id}/activate` | 激活计划 |
 | `PATCH` | `/v1/plans/{id}/complete` | 完成计划 |
+| `PATCH` | `/v1/plans/{id}/rollbacks` | 前向回滚到历史版本内容 |
 | `PATCH` | `/v1/plans/{id}/leases` | 给节点分配租约 |
 | `PATCH` | `/v1/leases/{id}/release` | 提前释放租约 |
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
@@ -181,7 +199,11 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 
 ## 状态及失败行为
 
-- 计划按 `draft -> active -> completed` 单向迁移，激活和完成需要匹配版本。
+- 计划按 `draft -> active -> completed` 单向迁移；活动计划可通过前向回滚生成新修订并安全回到草稿重新激活。
+- 前向回滚必须引用当前版本的最新 `review_required` 判定作为审批，返回内容包含回滚原因、原当前版本、历史目标版本、新版本和被取代租约。
+- 目标历史内容与当前相同返回 `rollback_not_required`，计划已结束返回 `invalid_state`，审批失效返回 `approval_invalid`。
+- 回滚请求按键和载荷指纹幂等，重放不会创建第二个回滚事实或第二个新版本。
+- 回滚后重新激活的租约、探针和判定都携带或引用新版本身份；旧的未完成租约会进入 `superseded`。
 - 区域版本只在计划草稿状态可追加，序列号严格递增且内容不可变。
 - A、AAAA、CNAME 条目在写入前规范化并稳定排序，重复条目直接拒绝。
 - 节点按 `ready -> leased -> ready` 变化，隔离节点不会被选中。
@@ -216,6 +238,7 @@ go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
 go run ./cmd/workflowprobe probe-ingestion
 go run ./cmd/workflowprobe consistency-assessment
+go run ./cmd/workflowprobe forward-rollback
 ```
 
 探针不访问外部网络，也不依赖已有状态文件。

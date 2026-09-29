@@ -21,10 +21,11 @@ const (
 type LeaseState string
 
 const (
-	LeaseClaimed  LeaseState = "claimed"
-	LeaseReported LeaseState = "reported"
-	LeaseReleased LeaseState = "released"
-	LeaseExpired  LeaseState = "expired"
+	LeaseClaimed    LeaseState = "claimed"
+	LeaseReported   LeaseState = "reported"
+	LeaseReleased   LeaseState = "released"
+	LeaseExpired    LeaseState = "expired"
+	LeaseSuperseded LeaseState = "superseded"
 )
 
 type Verdict string
@@ -49,13 +50,36 @@ type ZoneEntry struct {
 }
 
 type ZoneRevision struct {
-	ID         string      `json:"id"`
-	PlanID     string      `json:"plan_id"`
-	Serial     uint32      `json:"serial"`
-	Authority  string      `json:"authority"`
-	Entries    []ZoneEntry `json:"entries"`
-	EntryCount int         `json:"entry_count"`
-	CreatedAt  time.Time   `json:"created_at"`
+	ID         string            `json:"id"`
+	PlanID     string            `json:"plan_id"`
+	Serial     uint32            `json:"serial"`
+	Authority  string            `json:"authority"`
+	Entries    []ZoneEntry       `json:"entries"`
+	EntryCount int               `json:"entry_count"`
+	CreatedAt  time.Time         `json:"created_at"`
+	Rollback   *RevisionRollback `json:"rollback,omitempty"`
+}
+
+type RevisionRollback struct {
+	FactID           string `json:"fact_id"`
+	SourceRevisionID string `json:"source_revision_id"`
+	TargetRevisionID string `json:"target_revision_id"`
+	Reason           string `json:"reason"`
+	ApprovalID       string `json:"approval_id,omitempty"`
+}
+
+type RollbackFact struct {
+	ID                 string    `json:"id"`
+	PlanID             string    `json:"plan_id"`
+	RequestKey         string    `json:"request_key"`
+	SourceRevisionID   string    `json:"source_revision_id"`
+	TargetRevisionID   string    `json:"target_revision_id"`
+	NewRevisionID      string    `json:"new_revision_id"`
+	ApprovalID         string    `json:"approval_id"`
+	Reason             string    `json:"reason"`
+	PayloadFingerprint string    `json:"payload_fingerprint"`
+	SupersededLeaseIDs []string  `json:"superseded_lease_ids"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type RolloutPlan struct {
@@ -93,6 +117,8 @@ type NodeLease struct {
 	ExpiresAt    time.Time  `json:"expires_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	ProbeID      string     `json:"probe_id,omitempty"`
+	RevisionID   string     `json:"revision_id,omitempty"`
+	RollbackID   string     `json:"rollback_id,omitempty"`
 }
 
 type LeaseGroup struct {
@@ -102,6 +128,7 @@ type LeaseGroup struct {
 	RequestFingerprint string    `json:"request_fingerprint"`
 	Region             string    `json:"region,omitempty"`
 	LeaseIDs           []string  `json:"lease_ids"`
+	RevisionID         string    `json:"revision_id,omitempty"`
 	CreatedAt          time.Time `json:"created_at"`
 }
 
@@ -110,6 +137,7 @@ type Probe struct {
 	LeaseID            string    `json:"lease_id"`
 	PlanID             string    `json:"plan_id"`
 	NodeID             string    `json:"node_id"`
+	RevisionID         string    `json:"revision_id,omitempty"`
 	RequestKey         string    `json:"request_key"`
 	Success            bool      `json:"success"`
 	ObservedSerial     uint32    `json:"observed_serial"`
@@ -147,12 +175,14 @@ type State struct {
 	Revision              uint64                       `json:"revision"`
 	Plans                 map[string]RolloutPlan       `json:"plans"`
 	Revisions             map[string]ZoneRevision      `json:"revisions"`
+	Rollbacks             map[string]RollbackFact      `json:"rollbacks"`
 	Nodes                 map[string]ResolverNode      `json:"nodes"`
 	Leases                map[string]NodeLease         `json:"leases"`
 	LeaseGroups           map[string]LeaseGroup        `json:"lease_groups"`
 	Probes                map[string]Probe             `json:"probes"`
 	Assessments           map[string]RolloutAssessment `json:"assessments"`
 	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`
+	RollbackRequestKeys   map[string]string            `json:"rollback_request_keys"`
 	AssessmentRequestKeys map[string]string            `json:"assessment_request_keys"`
 	AuditEvents           []AuditEvent                 `json:"audit_events"`
 }

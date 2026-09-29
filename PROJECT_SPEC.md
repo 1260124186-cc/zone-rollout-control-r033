@@ -31,14 +31,28 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 
 ### ZoneRevision
 
-计划中不可变的区域内容版本。
+计划中不可变的区域内容版本。回滚不会修改、恢复或移动历史版本，而是复制其内容生成一个序列号更高的新版本。
 
 - `id`、`plan_id`、`serial`、`authority`。
 - `entries`：区域条目数组，每项包含 `owner`、`type` 和 `value`。
 - `entry_count`：由服务计算，客户端不能覆盖。
+- `rollback`：存在时记录前向回滚事实、原当前版本、历史目标版本、原因和审批（判定）标识。
 - `created_at`。
 
 同一计划内的序列号必须严格递增。条目类型只接受 `A`、`AAAA` 和 `CNAME`。`A` 与 `AAAA` 的值必须是 IPv4 或 IPv6 地址，`CNAME` 的值必须是规范域名。
+
+### RollbackFact
+
+一次前向回滚的不可变操作事实。
+
+- `id`、`plan_id`、`request_key`、`payload_fingerprint`。
+- `source_revision_id`：回滚前的当前版本。
+- `target_revision_id`：操作者选择的历史版本，该版本保持不可变。
+- `new_revision_id`：复制历史内容后生成的更高序列新版本。
+- `approval_id`：作为回滚依据的最新 `review_required` 判定标识。
+- `reason`、`superseded_lease_ids`、`created_at`。
+
+同请求键同内容重放返回同一事实和同一新版本；同请求键不同内容返回 `idempotency_conflict`。
 
 ### ResolverNode
 
@@ -53,22 +67,24 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 计划对某个解析节点的有期限占用。
 
 - `id`、`plan_id`、`node_id`、`allocation_id`。
-- `state`：`claimed`、`reported`、`released` 或 `expired`。
+- `state`：`claimed`、`reported`、`released`、`expired` 或 `superseded`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
+- `revision_id`：领取租约时计划激活的新版本身份；前向回滚会将仍领取的旧租约置为 `superseded`。
+- `rollback_id`：使租约失效的回滚事实。
 
 ### LeaseGroup
 
 一次租约分配请求的幂等记录。
 
-- `id`、`plan_id`、`request_key`、`request_fingerprint`、`region`、`lease_ids`。
+- `id`、`plan_id`、`request_key`、`request_fingerprint`、`region`、`revision_id`、`lease_ids`。
 - 相同请求键和相同内容重放时返回原分配组，内容不一致时返回冲突。
 
 ### Probe
 
 解析节点对指定租约提交的一次上线观察。
 
-- `id`、`lease_id`、`plan_id`、`node_id`。
+- `id`、`lease_id`、`plan_id`、`node_id`、`revision_id`。
 - `request_key`、`success`、`observed_serial`、`latency_ms`。
 - `observed_at`、`stored_at`、`payload_fingerprint`。
 
@@ -117,6 +133,16 @@ ready --lease--> leased --report--> ready
 - 区域名称、所有者名称和规范名称必须规范化为小写并移除末尾句点。
 - 重复加入完全相同的版本内容返回 `duplicate_revision`。
 
+### 前向回滚规则
+
+- 只有 `active` 计划可以回滚；`completed` 计划返回确定的 `invalid_state`。
+- 必须提供当前 `expected_version`、请求键、历史目标版本、原因和仍有效的回滚审批。
+- 审批必须是当前版本的最新判定，且结论为 `review_required`；属于其他计划或版本、已被后续判定取代时返回 `approval_invalid`。
+- 新版本序列号默认使用当前序列号加一，也可显式提供高于当前序列号的无符号 32 位整数。
+- 历史目标版本的内容与当前版本相同时返回 `rollback_not_required`，不创建新版本或回滚事实。
+- 回滚在同一事务内复制历史目标内容、写入回滚事实、把计划切回 `draft`、清空最近判定摘要，并使仍处于 `claimed` 的旧租约进入 `superseded`、释放占用节点。
+- 重新激活后，租约、租约组、探针和判定都使用回滚生成的新版本身份；判定只聚合该新版本的探针。
+
 ### 探针幂等
 
 - `observed_at` 不能晚于服务时间五分钟以上。
@@ -152,6 +178,7 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/plans/{id}/revisions`
 - `PATCH /v1/plans/{id}/activate`
 - `PATCH /v1/plans/{id}/complete`
+- `PATCH /v1/plans/{id}/rollbacks`
 
 步骤：
 
@@ -212,6 +239,22 @@ ready --lease--> leased --report--> ready
 
 失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
 
+### W5 前向回滚
+
+入口：`PATCH /v1/plans/{id}/rollbacks`。
+
+步骤：
+
+1. 校验请求键、目标历史版本、新序列号、原因、审批标识和乐观版本。
+2. 在锁内确认目标版本存在、审批仍对应当前版本的最新 `review_required` 判定，且目标内容不同于当前内容。
+3. 复制历史版本的权威和条目，生成更高序列的新版本，但不修改历史版本。
+4. 写入不可变回滚事实，关联原因、原当前版本、历史目标版本、新版本、审批和被取代的租约。
+5. 原子地把计划切回草稿、清空旧判定摘要、释放仍领取租约占用的节点。
+
+成功行为：重放同一请求返回同一个回滚事实、同一个新版本和当前计划；重新激活后新租约、探针和判定均引用新版本。
+
+失败行为：目标内容与当前相同、计划已结束、审批失效、版本不匹配、序列号不递增或同键异载荷均不会写入状态。
+
 ## 6. 模块边界
 
 | 模块 | 路径 | 责任 |
@@ -255,6 +298,7 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/plans/{id}/revisions`
 - `PATCH /v1/plans/{id}/activate`
 - `PATCH /v1/plans/{id}/complete`
+- `PATCH /v1/plans/{id}/rollbacks`
 - `PATCH /v1/plans/{id}/leases`
 - `PATCH /v1/leases/{id}/release`
 - `PATCH /v1/leases/{id}/probes`
@@ -282,5 +326,6 @@ ready --lease--> leased --report--> ready
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
 4. 一致性通过、审核触发、最新结果查询和幂等重放。
+5. 前向回滚复制历史内容生成高序列新版本，重放保持同一事实，且重新激活后的租约和判定引用新版本。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

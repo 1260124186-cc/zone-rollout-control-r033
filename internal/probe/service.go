@@ -65,7 +65,13 @@ func (s *Service) Submit(
 			return nil
 		}
 		if lease.State != domain.LeaseClaimed {
-			return domain.NewError(domain.CodeLeaseNotClaimed, "lease is not claimed", map[string]any{
+			code := domain.CodeLeaseNotClaimed
+			message := "lease is not claimed"
+			if lease.State == domain.LeaseSuperseded {
+				code = domain.CodeLeaseSuperseded
+				message = "lease was superseded by rollback"
+			}
+			return domain.NewError(code, message, map[string]any{
 				"lease_id": leaseID,
 				"state":    lease.State,
 			})
@@ -99,6 +105,7 @@ func (s *Service) Submit(
 			LeaseID:            leaseID,
 			PlanID:             lease.PlanID,
 			NodeID:             lease.NodeID,
+			RevisionID:         lease.RevisionID,
 			RequestKey:         input.RequestKey,
 			Success:            input.Success,
 			ObservedSerial:     input.ObservedSerial,
