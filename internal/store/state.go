@@ -33,11 +33,17 @@ func normalize(state domain.State) domain.State {
 	if state.Assessments == nil {
 		state.Assessments = make(map[string]domain.RolloutAssessment)
 	}
+	if state.Rollbacks == nil {
+		state.Rollbacks = make(map[string]domain.RollbackRecord)
+	}
 	if state.LeaseRequestKeys == nil {
 		state.LeaseRequestKeys = make(map[string]string)
 	}
 	if state.AssessmentRequestKeys == nil {
 		state.AssessmentRequestKeys = make(map[string]string)
+	}
+	if state.RollbackRequestKeys == nil {
+		state.RollbackRequestKeys = make(map[string]string)
 	}
 	if state.AuditEvents == nil {
 		state.AuditEvents = []domain.AuditEvent{}

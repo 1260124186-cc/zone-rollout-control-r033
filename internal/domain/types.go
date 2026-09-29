@@ -56,6 +56,8 @@ type ZoneRevision struct {
 	Entries    []ZoneEntry `json:"entries"`
 	EntryCount int         `json:"entry_count"`
 	CreatedAt  time.Time   `json:"created_at"`
+	// RollbackID links a revision produced by a forward rollback to its fact.
+	RollbackID string `json:"rollback_id,omitempty"`
 }
 
 type RolloutPlan struct {
@@ -68,6 +70,7 @@ type RolloutPlan struct {
 	Version             uint64     `json:"version"`
 	LatestRevisionID    string     `json:"latest_revision_id,omitempty"`
 	LatestAssessmentID  string     `json:"latest_assessment_id,omitempty"`
+	LatestRollbackID    string     `json:"latest_rollback_id,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	ActivatedAt         *time.Time `json:"activated_at,omitempty"`
 	CompletedAt         *time.Time `json:"completed_at,omitempty"`
@@ -84,15 +87,18 @@ type ResolverNode struct {
 }
 
 type NodeLease struct {
-	ID           string     `json:"id"`
-	PlanID       string     `json:"plan_id"`
-	NodeID       string     `json:"node_id"`
-	AllocationID string     `json:"allocation_id"`
-	State        LeaseState `json:"state"`
-	ClaimedAt    time.Time  `json:"claimed_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	ProbeID      string     `json:"probe_id,omitempty"`
+	ID           string `json:"id"`
+	PlanID       string `json:"plan_id"`
+	NodeID       string `json:"node_id"`
+	AllocationID string `json:"allocation_id"`
+	// RevisionID is the plan revision identity that was current when the
+	// lease was claimed, so leases stay bound to a concrete revision.
+	RevisionID string     `json:"revision_id,omitempty"`
+	State      LeaseState `json:"state"`
+	ClaimedAt  time.Time  `json:"claimed_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	ProbeID    string     `json:"probe_id,omitempty"`
 }
 
 type LeaseGroup struct {
@@ -133,6 +139,38 @@ type RolloutAssessment struct {
 	CreatedAt        time.Time `json:"created_at"`
 }
 
+// RollbackRecord is the immutable fact of one forward rollback. It records why
+// the rollback happened, the historical revision whose content was restored,
+// the brand-new higher-serial revision that content was published as, the
+// revision whose current content was superseded, and the approval that
+// authorized the operation.
+type RollbackRecord struct {
+	ID     string `json:"id"`
+	PlanID string `json:"plan_id"`
+	// RequestKey and Fingerprint make the rollback safely replayable.
+	RequestKey  string `json:"request_key"`
+	Fingerprint string `json:"payload_fingerprint"`
+
+	Reason string `json:"reason"`
+
+	// SourceRevisionID/SourceSerial identify the immutable historical revision
+	// selected as the rollback target.
+	SourceRevisionID string `json:"source_revision_id"`
+	SourceSerial     uint32 `json:"source_serial"`
+	// FromRevisionID/FromSerial identify the current revision whose content
+	// was superseded; it remains in history untouched.
+	FromRevisionID string `json:"from_revision_id"`
+	FromSerial     uint32 `json:"from_serial"`
+	// NewRevisionID/NewSerial identify the brand-new revision identity the
+	// source content was copied into.
+	NewRevisionID string    `json:"new_revision_id"`
+	NewSerial     uint32    `json:"new_serial"`
+	ApprovalID    string    `json:"approval_id"`
+	ApprovedUntil time.Time `json:"approved_until"`
+	Operator      string    `json:"operator,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 type AuditEvent struct {
 	ID         string         `json:"id"`
 	EntityType string         `json:"entity_type"`
@@ -152,8 +190,10 @@ type State struct {
 	LeaseGroups           map[string]LeaseGroup        `json:"lease_groups"`
 	Probes                map[string]Probe             `json:"probes"`
 	Assessments           map[string]RolloutAssessment `json:"assessments"`
+	Rollbacks             map[string]RollbackRecord    `json:"rollbacks"`
 	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`
 	AssessmentRequestKeys map[string]string            `json:"assessment_request_keys"`
+	RollbackRequestKeys   map[string]string            `json:"rollback_request_keys"`
 	AuditEvents           []AuditEvent                 `json:"audit_events"`
 }
 

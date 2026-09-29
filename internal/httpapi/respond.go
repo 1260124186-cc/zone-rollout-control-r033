@@ -74,6 +74,8 @@ func statusCode(code domain.ErrorCode) int {
 		domain.CodeNodeUnavailable,
 		domain.CodeLeaseExpired,
 		domain.CodeLeaseNotClaimed,
+		domain.CodeApprovalExpired,
+		domain.CodeRollbackNoop,
 		domain.CodeConflict:
 		return http.StatusConflict
 	case domain.CodeNoProbes:

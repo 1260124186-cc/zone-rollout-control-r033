@@ -103,9 +103,13 @@ func (s *Service) Allocate(
 				PlanID:       planID,
 				NodeID:       candidate.ID,
 				AllocationID: groupID,
-				State:        domain.LeaseClaimed,
-				ClaimedAt:    now,
-				ExpiresAt:    expiresAt,
+				// Bind the lease to the revision identity current at claim
+				// time; after a forward rollback later leases reference the
+				// new revision identity.
+				RevisionID: plan.LatestRevisionID,
+				State:      domain.LeaseClaimed,
+				ClaimedAt:  now,
+				ExpiresAt:  expiresAt,
 			}
 			leaseIDs = append(leaseIDs, leaseID)
 		}

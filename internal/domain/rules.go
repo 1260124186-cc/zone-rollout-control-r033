@@ -67,6 +67,24 @@ func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// RollbackFingerprint covers every client-supplied rollback parameter so a
+// reused request key with changed content is detected as a conflict.
+func RollbackFingerprint(planID string, input RollbackInput) string {
+	payload := fmt.Sprintf(
+		"%s|%s|%s|%d|%s|%s|%s|%s",
+		planID,
+		input.RequestKey,
+		input.SourceRevisionID,
+		input.Serial,
+		input.Reason,
+		input.ApprovalID,
+		input.ApprovedUntil.UTC().Format(time.RFC3339Nano),
+		input.Operator,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 func BuildAssessment(
 	id string,
 	plan RolloutPlan,

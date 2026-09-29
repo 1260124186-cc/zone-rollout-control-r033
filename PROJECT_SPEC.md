@@ -40,6 +40,22 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 
 同一计划内的序列号必须严格递增。条目类型只接受 `A`、`AAAA` 和 `CNAME`。`A` 与 `AAAA` 的值必须是 IPv4 或 IPv6 地址，`CNAME` 的值必须是规范域名。
 
+回滚产生的新版本通过 `rollback_id` 反向关联到回滚事实。
+
+### RollbackRecord
+
+一次前向回滚的不可变操作事实。
+
+- `id`、`plan_id`、`request_key`、`payload_fingerprint`。
+- `reason`：回滚原因。
+- `source_revision_id`、`source_serial`：被选为目标的历史版本。
+- `from_revision_id`、`from_serial`：被取代的当前版本。
+- `new_revision_id`、`new_serial`：回滚生成的全新更高序列版本。
+- `approval_id`、`approved_until`、`operator`：审批依据、审批有效期和操作人。
+- `created_at`。
+
+历史版本不可变：回滚只复制其内容生成新版本，不修改也不删除源版本和被取代版本。
+
 ### ResolverNode
 
 边缘解析节点档案。
@@ -53,6 +69,7 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 计划对某个解析节点的有期限占用。
 
 - `id`、`plan_id`、`node_id`、`allocation_id`。
+- `revision_id`：租约领取时计划最新版本的身份，回滚后的新租约引用新版本。
 - `state`：`claimed`、`reported`、`released` 或 `expired`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
@@ -116,6 +133,17 @@ ready --lease--> leased --report--> ready
 - 条目数量范围为 1 到 500。
 - 区域名称、所有者名称和规范名称必须规范化为小写并移除末尾句点。
 - 重复加入完全相同的版本内容返回 `duplicate_revision`。
+
+### 前向回滚规则
+
+- 只有 `active` 计划可以回滚；`draft` 与 `completed` 返回 `invalid_state`。
+- 必须选择本计划内已存在的历史版本作为目标，否则返回 `not_found`。
+- 回滚把目标版本内容复制为全新版本：未提供序列号时自动取当前序列号加一，显式提供时必须严格高于当前序列号；序列号达到 `uint32` 上限时返回 `conflict`。
+- 目标版本的权威来源和条目与当前版本完全一致时为确定性空操作，返回 `rollback_noop`，不写状态。
+- `approved_until` 不晚于服务时间时审批失效，返回 `approval_expired`，不写状态。
+- 回滚同时写入不可变 `RollbackRecord`，关联原因、源版本、被取代版本、新版本、审批和操作人，并更新 `latest_revision_id`、`latest_rollback_id` 与计划 `version`。
+- 相同请求键和相同载荷重放返回同一条回滚事实；同键异载荷返回 `idempotency_conflict`。
+- 回滚后领取的租约记录新版本 `revision_id`，一致性判定以新版本序列号为准。
 
 ### 探针幂等
 
@@ -212,6 +240,25 @@ ready --lease--> leased --report--> ready
 
 失败行为：缺少区域版本、没有探针、请求键冲突或保存失败不会更新计划摘要。
 
+### W5 前向回滚
+
+入口：
+
+- `PATCH /v1/plans/{id}/rollbacks`
+- `GET /v1/plans/{id}/rollbacks/latest`
+
+步骤：
+
+1. HTTP 层严格解码回滚请求（目标版本、原因、审批、有效期、操作人、请求键）。
+2. 回滚服务规范化并校验输入，审批过期直接拒绝。
+3. 存储层在锁内先解析请求键幂等索引，再校验计划状态、目标版本和当前内容。
+4. 目标内容与当前一致时返回 `rollback_noop`；否则复制目标内容，生成全新更高序列版本和不可变回滚事实，原子替换快照。
+5. 返回回滚事实、新版本和更新后的计划。
+
+成功行为：历史版本保持不变，产生一个序列号更高的新版本；原因、源版本、被取代版本和审批关系完整关联；重放返回同一事实。
+
+失败行为：非活动计划、未知目标版本、相同内容、审批失效、序列号不递增或同键异载荷都不会产生部分状态，也不会产生第二个回滚事实。
+
 ## 6. 模块边界
 
 | 模块 | 路径 | 责任 |
@@ -223,6 +270,7 @@ ready --lease--> leased --report--> ready
 | allocation | `internal/allocation` | 节点筛选、幂等分配组和租约生命周期 |
 | probe | `internal/probe` | 探针校验、幂等写入和租约完成 |
 | assessment | `internal/assessment` | 探针聚合和一致性判定 |
+| rollback | `internal/rollback` | 前向回滚事实、新版本发布和审批关联 |
 | domain | `internal/domain` | 聚合、值校验、状态迁移和纯计算 |
 | store | `internal/store` | 锁内副本事务和原子 JSON 持久化 |
 | platform | `internal/platform` | 时钟、标识、游标和文件锁 |
@@ -260,6 +308,8 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
 - `GET /v1/plans/{id}/assessments/latest`
+- `PATCH /v1/plans/{id}/rollbacks`
+- `GET /v1/plans/{id}/rollbacks/latest`
 
 ## 8. 工程机制
 
@@ -282,5 +332,6 @@ ready --lease--> leased --report--> ready
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
 3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
 4. 一致性通过、审核触发、最新结果查询和幂等重放。
+5. 前向回滚发布全新高序列版本、事实关联、历史版本不变、空内容/已完成/审批失效、幂等重放，以及回滚后租约与判定引用新版本。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

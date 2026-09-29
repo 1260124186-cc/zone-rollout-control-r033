@@ -45,6 +45,7 @@ internal/fleet              解析节点档案服务
 internal/allocation         节点选择和租约生命周期
 internal/probe              探针登记、幂等重放和租约完成
 internal/assessment         一致性聚合和最新结果查询
+internal/rollback           前向回滚事实、新版本发布和审批关联
 internal/httpapi            HTTP 路由、中间件和响应映射
 internal/workflowprobe      真实 HTTP 路径验证
 ```
@@ -135,6 +136,32 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
   -d '{"request_key": "assess-request-0001"}'
 ```
 
+前向回滚到某个历史区域版本：上线发现问题后，选择一个历史版本作为目标，
+服务把它的内容复制为一个全新的、序列号更高的版本，并把回滚原因、目标历史
+版本、被取代的当前版本、审批依据和操作人关联为一条不可变的回滚事实；历史
+版本本身保持不变。
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/rollbacks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source_revision_id": "rev_...",
+    "serial": 0,
+    "reason": "post-deploy outage: restore last known good",
+    "approval_id": "apr-2026-09-29-01",
+    "approved_until": "2026-09-29T20:00:00Z",
+    "operator": "oncall-dns",
+    "request_key": "rollback-request-0001"
+  }'
+```
+
+`serial` 为 0 时服务自动分配“当前序列号 + 1”；显式提供时必须严格高于当前
+序列号。回滚后新领取的租约会记录新的 `revision_id`，一致性判定也以新版本
+序列号为准。相同 `request_key` 与相同内容的重放返回同一条回滚事实，同键
+异载荷返回 `idempotency_conflict`。目标内容与当前完全一致时返回
+`rollback_noop`，计划非 `active`（如已完成）返回 `invalid_state`，审批已
+失效返回 `approval_expired`，均不会产生部分状态。
+
 ## API 概览
 
 成功响应：
@@ -178,6 +205,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
 | `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
 | `GET` | `/v1/plans/{id}/assessments/latest` | 查询最近判定 |
+| `PATCH` | `/v1/plans/{id}/rollbacks` | 前向回滚到历史区域版本 |
+| `GET` | `/v1/plans/{id}/rollbacks/latest` | 查询最近回滚事实 |
 
 ## 状态及失败行为
 
@@ -216,6 +245,7 @@ go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
 go run ./cmd/workflowprobe probe-ingestion
 go run ./cmd/workflowprobe consistency-assessment
+go run ./cmd/workflowprobe forward-rollback
 ```
 
 探针不访问外部网络，也不依赖已有状态文件。

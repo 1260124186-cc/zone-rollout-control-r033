@@ -56,6 +56,26 @@ type AssessmentInput struct {
 	RequestKey string `json:"request_key"`
 }
 
+// RollbackInput requests a forward rollback to an existing historical
+// revision. Serial is optional: zero means the service assigns the next
+// strictly higher serial; otherwise the caller must supply a serial above the
+// current one. ApprovedUntil is the approval validity deadline.
+type RollbackInput struct {
+	SourceRevisionID string    `json:"source_revision_id"`
+	Serial           uint32    `json:"serial,omitempty"`
+	Reason           string    `json:"reason"`
+	ApprovalID       string    `json:"approval_id"`
+	ApprovedUntil    time.Time `json:"approved_until"`
+	Operator         string    `json:"operator,omitempty"`
+	RequestKey       string    `json:"request_key"`
+}
+
+const (
+	MaxReasonRunes     = 500
+	MaxApprovalIDRunes = 180
+	MaxOperatorRunes   = 180
+)
+
 func NormalizePlanInput(input PlanCreateInput) PlanCreateInput {
 	input.Zone = canonicalName(input.Zone)
 	return input
@@ -245,6 +265,47 @@ func ValidateAssessmentInput(input AssessmentInput) error {
 		return Validation("assessment input is invalid", map[string]any{
 			"request_key": err.Error(),
 		})
+	}
+	return nil
+}
+
+func NormalizeRollbackInput(input RollbackInput) RollbackInput {
+	input.SourceRevisionID = strings.TrimSpace(input.SourceRevisionID)
+	input.Reason = strings.TrimSpace(input.Reason)
+	input.ApprovalID = strings.TrimSpace(input.ApprovalID)
+	input.Operator = strings.TrimSpace(input.Operator)
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	input.ApprovedUntil = input.ApprovedUntil.UTC()
+	return input
+}
+
+func ValidateRollbackInput(input RollbackInput, now time.Time) error {
+	details := make(map[string]any)
+	if input.SourceRevisionID == "" {
+		details["source_revision_id"] = "is required"
+	}
+	if count := utf8.RuneCountInString(input.Reason); count < 1 || count > MaxReasonRunes {
+		details["reason"] = "must contain between 1 and 500 characters"
+	}
+	if count := utf8.RuneCountInString(input.ApprovalID); count < 1 || count > MaxApprovalIDRunes {
+		details["approval_id"] = "must contain between 1 and 180 characters"
+	}
+	if count := utf8.RuneCountInString(input.Operator); count > MaxOperatorRunes {
+		details["operator"] = "must be at most 180 characters"
+	}
+	if err := validateRequestKey(input.RequestKey); err != nil {
+		details["request_key"] = err.Error()
+	}
+	if input.ApprovedUntil.IsZero() {
+		details["approved_until"] = "is required"
+	} else if !input.ApprovedUntil.After(now.UTC()) {
+		return NewError(CodeApprovalExpired, "rollback approval is no longer valid", map[string]any{
+			"approval_id":    input.ApprovalID,
+			"approved_until": input.ApprovedUntil.Format(time.RFC3339),
+		})
+	}
+	if len(details) > 0 {
+		return Validation("rollback input is invalid", details)
 	}
 	return nil
 }

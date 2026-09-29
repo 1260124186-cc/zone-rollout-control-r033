@@ -39,6 +39,11 @@
       "responsibility": "probe aggregation, deterministic verdicts, and latest result reads"
     },
     {
+      "id": "rollback",
+      "path": "internal/rollback",
+      "responsibility": "forward rollback facts, fresh higher-serial revision publication, and approval linkage"
+    },
+    {
       "id": "domain",
       "path": "internal/domain",
       "responsibility": "entities, DNS value validation, transitions, and stable errors"
@@ -151,6 +156,30 @@
         "httpapi",
         "assessment",
         "probe",
+        "domain",
+        "storage"
+      ]
+    },
+    {
+      "id": "forward-rollback",
+      "name": "Forward rollback to a historical revision",
+      "entry": "PATCH /v1/plans/{id}/rollbacks",
+      "steps": [
+        "validate the active plan, target historical revision, reason, and approval window",
+        "reject identical current content and expired approvals before any write",
+        "copy the historical content into a fresh strictly higher-serial revision",
+        "persist an immutable rollback fact linking reason, source, superseded revision, new revision, and approval",
+        "replay the same request key safely and reject changed payloads"
+      ],
+      "success": "a new higher-serial revision is current, historical revisions stay immutable, and leases and assessments reference the new revision identity",
+      "failure": "inactive plans, unknown targets, no-op content, invalid serials, and approval expiry produce no second rollback fact or partial state",
+      "verification": "workflowprobe forward-rollback performs chained rollbacks, replays, edge-case rejections, and post-rollback lease and assessment checks",
+      "module_ids": [
+        "httpapi",
+        "rollback",
+        "plan",
+        "allocation",
+        "assessment",
         "domain",
         "storage"
       ]
